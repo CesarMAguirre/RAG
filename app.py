@@ -2,16 +2,22 @@ import streamlit as st
 from langchain_community.llms import Ollama
 
 # Let's initialize LLama via Ollama
-llm = Ollama(model = "llama3:8b", temperature = 0.75)
+@st.cache_resource
+def load_llm():
+    return Ollama(model = "llama3:8b", temperature = 0.75)
+llm = load_llm()
+
+# Async response generation 
+async def generate_response(prompt):
+    return await llm.invoke(prompt)
 
 # Initialzie session state variables
-
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Ask me anything!"}]
+    st.session_state.messages = [{"role": "assistant", "content": "What can I help you with today?"}] 
 
 if "questions" not in st.session_state:
     st.session_state.questions = [] # List to store user questions
-    
+
 # Display chat history
 st.title("Local Llama Chat")
 for message in st.session_state.messages:
