@@ -2,3 +2,14 @@ What's 2 + 2?
 what's the capital of Italy?
 do yo know some dishes from Louisiana, US? I'd like to cook some.
 how do you prepare boudin balls? i want pepperjack in them too
+How much is 2 + 2?
+How much is 2 + 2?
+Who was the first US president? 
+What's the capital of France?
+Based on the attached document, what are some ways to build a Q&A system?
+Based on the attached document, what are some ways to build a Q&A system?
+Based on the attached document, what are some ways to build a Q&A system?
+Based on the attached document, what are some ways to build a Q&A system?
+what libraries are being used in the attached file?
+what are the chapters of the attached PDF?
+what is included in the table of contents?
