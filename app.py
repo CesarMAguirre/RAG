@@ -1,21 +1,21 @@
 import os
 import asyncio
 import streamlit as st
+from typing import List, Dict, Any, Optional
 
 from PyPDF2 import PdfReader
 from langchain_community.llms import Ollama
 
-# Let's initialize sidebar state in session state
-if "sidebar_state" not in st.session_state:
-    st.session_state.sidebar_state = "expanded" # Default state
-
 # Configure page with current sidebar state
+if "sidebar_state" not in st.session_state:
+    st.session_state.sidebar_state = "expanded"  # Default state
+
 st.set_page_config(
     page_title="Local Llama Chat",
     initial_sidebar_state=st.session_state.sidebar_state,
 )
 
-# Add this near the top of your app
+# Styling
 st.markdown("""
 <style>
     .stButton button {
@@ -30,129 +30,219 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Chat histories management
-# @st.cache_resource
+# LLM Configuration
+@st.cache_resource
 def load_llm():
-    return Ollama(model = "llama3:8b", temperature = 0.75, num_thread = 4)
+    """Load the LLM with optimized settings"""
+    return Ollama(
+        model="llama3:8b", 
+        temperature=0.75,
+        num_thread=4,
+        num_gpu=1,  
+        num_predict=256  # Limit token generation for faster responses
+    )
+
 llm = load_llm()
 
-# Initialzie session state variables
+# Initialize session state variables
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "What can I help you with today?"}] 
+    st.session_state.messages = [{"role": "assistant", "content": "What can I help you with today?"}]
 
 if "questions" not in st.session_state:
-    st.session_state.questions = [] # List to store user questions
+    st.session_state.questions = []  # List to store user questions
 
 if "pdf_text" not in st.session_state:
-    st.session_state.pdf_text = None # Variable to store PDF text
+    st.session_state.pdf_text = {}  # Dictionary to store PDF text by filename
+
+if "vectorstores" not in st.session_state:
+    st.session_state.vectorstores = {}  # For document retrieval
+
+# Helper functions
+def extract_pdf_text(pdf_file, max_pages: Optional[int] = None) -> str:
+    """Extract text from PDF more efficiently with page limiting"""
+    try:
+        pdf_reader = PdfReader(pdf_file)
+        pages_to_read = min(len(pdf_reader.pages), max_pages) if max_pages else len(pdf_reader.pages)
+        
+        pdf_text = ""
+        for i in range(pages_to_read):
+            page = pdf_reader.pages[i]
+            page_text = page.extract_text()
+            if page_text:
+                pdf_text += f"\n--- Page {i+1} ---\n{page_text}"
+        
+        return pdf_text
+    except Exception as e:
+        st.error(f"Error processing PDF: {e}")
+        return ""
+
+def process_file(uploaded_file) -> str:
+    """Process various file types and return content"""
+    if uploaded_file.type == "application/pdf":
+        # Process first 10 pages for speed (adjust as needed)
+        return extract_pdf_text(uploaded_file, max_pages=10)
+    
+    elif uploaded_file.type in ["text/plain", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
+        try:
+            file_text = uploaded_file.read().decode("utf-8")
+            return file_text
+        except Exception as e:
+            st.error(f"Error reading file {uploaded_file.name}: {e}")
+            return ""
+    return ""
+
+async def generate_response(prompt: str) -> str:
+    """Generate response asynchronously"""
+    try:
+        # Using ainvoke for better async performance if available
+        if hasattr(llm, 'ainvoke'):
+            return await llm.ainvoke(prompt)
+        else:
+            # Fallback to synchronous invoke
+            return llm.invoke(prompt)
+    except Exception as e:
+        st.error(f"Error generating response: {e}")
+        return "I'm having trouble processing your request. Please try again."
+
+# UI Components
+st.title("Cesar's Local Llama Chat")
 
 # Display chat history
-st.title("Local Llama Chat")
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# Place uploader above chat input
-uploaded_files = st.file_uploader("Upload files for context", 
-                                  type=["pdf", "txt", "docx", "jpg", "png"], 
-                                  accept_multiple_files=True)
+# File uploader
+with st.expander("Upload files for context", expanded=False):
+    uploaded_files = st.file_uploader(
+        "Upload PDF, TXT or DOCX files", 
+        type=["pdf", "txt", "docx"], 
+        accept_multiple_files=True,
+        key="file_uploader"
+    )
+    
+    if uploaded_files:
+        files_str = ", ".join([f.name for f in uploaded_files])
+        st.success(f"Files ready: {files_str}")
+        
+        # Process button to manually trigger file processing
+        if st.button("Process Files"):
+            progress_bar = st.progress(0)
+            for i, file in enumerate(uploaded_files):
+                with st.spinner(f"Processing {file.name}..."):
+                    file_text = process_file(file)
+                    if file_text:
+                        st.session_state.pdf_text[file.name] = file_text
+                progress_bar.progress((i + 1) / len(uploaded_files))
+            st.success("All files processed!")
 
+# Chat input
 prompt = st.chat_input("Ask anything")
 
-# Then adapt your processing logic to handle files from uploaded_files variable
 if prompt:
+    # Add user message to history
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.questions.append(prompt)
+    
+    # Display user message
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    # Process any newly uploaded files first
+    if uploaded_files:  # Check if uploaded_files is not None
+        new_files = [f for f in uploaded_files if f.name not in st.session_state.pdf_text]
+        for file in new_files:
+            file_text = process_file(file)
+            if file_text:
+                st.session_state.pdf_text[file.name] = file_text
+    
+    # Generate response with context from uploaded files
+    with st.chat_message("assistant"):
+        # Create a placeholder for streaming response
+        message_placeholder = st.empty()
         
-        # Handle different types of input (text-only or text + files)
-        if isinstance(prompt, dict) or hasattr(prompt, 'text'):
-            user_text = prompt.text if hasattr(prompt, 'text') else ""
-            uploaded_files = prompt.files if hasattr(prompt, 'files') else []
-
-            # If no text but files, show a default message
-            if not user_text and uploaded_files:
-                user_text = "📎 Uploaded files"
-   
-            # Save question to list and file
-            st.session_state.questions.append(user_text)
-            with open("questions.txt", "a") as f:
-                f.write(f'{user_text}\n')
-
-            # Add user message to history
-            st.session_state.messages.append({"role": "user", "content": user_text})
+        # Determine the context to use
+        context_text = ""
+        if st.session_state.pdf_text:
+            # Use the first 2000 chars from each document, up to 3 documents for speed
+            doc_count = 0
+            for filename, text in st.session_state.pdf_text.items():
+                if doc_count >= 3:  # Limit to 3 documents for speed
+                    break
+                context_text += f"\n--- From {filename} ---\n{text[:2000]}"
+                doc_count += 1
             
-            # Display user message
-            with st.chat_message("user"):
-                st.markdown(user_text)
+            full_prompt = f"""Context from documents:
+{context_text.strip()[:4000]}
 
-                # Display file names if files were uploaded
-                if uploaded_files:
-                    file_list = '.'.join([f.name for f in uploaded_files])
-                    st.markdown(f"Uploaded: {file_list}")
-            # Process uploaded files
-            context_text = ""
-            for uploaded_file in uploaded_files:
-                if uploaded_file.type == "application/pdf":
-                    # Process PDF file
-                    pdf_reader = PdfReader(uploaded_file)
-                    pdf_text = ""
-                    for page in pdf_reader.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            pdf_text += page_text
-                    
-                    # Store the PDF text 
-                    st.session_state.pdf_text[uploaded_file.name] = pdf_text
-                    context_text += pdf_text
-                elif uploaded_file.type in ["text/plain", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]:
-                    # Process text files
+User question: {prompt}
+
+Answer based only on the provided context. If the context doesn't contain relevant information, say so:"""
+        else:
+            full_prompt = prompt
+        
+        # Stream the response for better UX
+        try:
+            if hasattr(llm, 'stream'):
+                full_response = ""
+                # Display a spinner while waiting for the first chunk
+                with st.spinner("Generating response..."):
                     try:
-                        file_text = uploaded_file.read().decode("utf-8")
-                        st.session_state
-                        context_text += file_text
+                        for chunk in llm.stream(full_prompt):
+                            full_response += chunk
+                            message_placeholder.markdown(full_response + "▌")
+                        message_placeholder.markdown(full_response)
                     except Exception as e:
-                        st.error(f"Error reading file {uploaded_file.name}: {e}")
-            
-            # Generate response with context from uploaded files or existing context 
-            with st.chat_message("assistant"):
-                if context_text:
-                    context = context_text[:3000]
-                    full_promomt = f'Context from uploaded document(s): {context} \n\n User question: {user_text} \nAnswer based only on the provided context:'
-                elif st.session_state.pdf_text:
-                    # Use existing context from previously uploaded files
-                    combined_text = "\n".join(st.session_state.pdf_text.values())
-                    context = combined_text[:3000]
-                    full_promomt = f'Context from previously uploaded document(s): {context} \n\n User question: {user_text} \nAnswer based only on the provided context:'
-                else: 
-                    # No context available, just ask the question
-                    full_prompt = user_text
-                response = llm.invoke(full_prompt)
-                st.markdown(response)
+                        st.error(f"Error streaming response: {e}")
+                        full_response = "I encountered an error while generating a response. Please try again."
+                        message_placeholder.markdown(full_response)
+            else:
+                # Fallback to async response
+                with st.spinner("Generating response..."):
+                    full_response = asyncio.run(generate_response(full_prompt))
+                    message_placeholder.markdown(full_response)
+        except Exception as e:
+            st.error(f"Error generating response: {str(e)}")
+            full_response = "I encountered an error. Please check if Ollama is running properly."
+            message_placeholder.markdown(full_response)
+        
+        # Store assistant response
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        
+        # Save questions to file
+        with open("questions.txt", "a") as f:
+            f.write(f'{prompt}\n')
 
-                # Store assistant response
-                st.session_state.messages.append({"role": "assistant", "content": response})
-        else: 
-        # Legacy handling (text-only, no file)
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            st.session_state.questions.append(prompt)
+# Show saved questions in an expander
+with st.expander("Saved Questions", expanded=False):
+    if st.session_state.questions:
+        for i, question in enumerate(st.session_state.questions):
+            st.markdown(f'{i+1}. {question}')
+    else:
+        st.info("No questions saved yet.")
 
-            with st.chat_message("user"):
-                st.markdown(prompt)
-            # Generate response
-            with st.chat_message("assistant"):
-                if st.session_state.pdf_text:
-                    # Use context from previously uploaded files
-                    combined_text = "\n".join(st.session_state.pdf_text.values())
-                    context = combined_text[:3000]
-                    full_prompt = f'Context: {context}\n\nUser: {prompt}\nAssistant:'
-                else:
-                    full_prompt = prompt
-                response = llm.invoke(full_prompt)
-                st.markdown(response)
-
-                # Store assistant response
-                st.session_state.messages.append({"role": "assistant", "content": response})
-
-# Show saved questions 
-if st.checkbox("show saved questions"):
-    st.subheader("User Questions")
-    for question in st.session_state.questions:
-        st.markdown(f' - {question}')
+# Add settings in sidebar
+with st.sidebar:
+    st.header("Settings")
+    
+    # Model settings
+    st.subheader("Model Configuration")
+    temperature = st.slider("Temperature", 0.0, 1.0, 0.75, 0.05)
+    token_limit = st.slider("Response Token Limit", 100, 2048, 512, 50)
+    
+    # Apply settings
+    if st.button("Apply Settings"):
+        # Recreate the LLM with new settings
+        llm = Ollama(
+            model="llama3:8b", 
+            temperature=temperature,
+            num_thread=4,
+            num_gpu=1,
+            num_predict=token_limit
+        )
+        st.success("Settings applied!")
+    
+    # Clear conversation
+    if st.button("Clear Conversation"):
+        st.session_state.messages = [{"role": "assistant", "content": "What can I help you with today?"}]
+        st.experimental_rerun()

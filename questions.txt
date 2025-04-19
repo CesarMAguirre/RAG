@@ -13,3 +13,8 @@ Based on the attached document, what are some ways to build a Q&A system?
 what libraries are being used in the attached file?
 what are the chapters of the attached PDF?
 what is included in the table of contents?
+What is the distance between the earth and the Moon?
+Please summarize the content in the attached pdf? What is it about?
+what is 2 + 2
+what's 2 + 2?
+what is 2 + 2?
