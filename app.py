@@ -246,3 +246,4 @@ with st.sidebar:
     if st.button("Clear Conversation"):
         st.session_state.messages = [{"role": "assistant", "content": "What can I help you with today?"}]
         st.experimental_rerun()
+        
